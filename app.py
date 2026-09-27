@@ -5,7 +5,7 @@ import cv2
 import requests
 import numpy as np
 import tensorflow as tf
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 def load_env():
@@ -20,7 +20,10 @@ def load_env():
 load_env()
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-app = Flask(__name__)
+# Resolve the React production build directory (sibling "dist/" to this file)
+DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
+
+app = Flask(__name__, static_folder=DIST_DIR, static_url_path='')
 CORS(app)
 
 # Load Local Keras Models
@@ -230,8 +233,23 @@ def analyze_crop_with_gemini(crop_b64: str):
     gemini_disabled_until = time.time() + 30
     return None
 
-@app.route('/')
-def index():
+# ── Serve React SPA ──────────────────────────────────────────────────────────
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react(path):
+    """Serve the React production build for every non-API route."""
+    # If the requested path maps to a real file in dist/ (js, css, assets …)
+    # serve it directly; otherwise fall back to index.html for client-side routing.
+    if path and os.path.exists(os.path.join(DIST_DIR, path)):
+        return send_from_directory(DIST_DIR, path)
+    return send_from_directory(DIST_DIR, 'index.html')
+
+
+# ── API status endpoint ───────────────────────────────────────────────────────
+
+@app.route('/api/status')
+def api_status():
     return jsonify({
         'status': 'ok',
         'message': 'SENTINEL AI High-Accuracy Engine',
@@ -365,4 +383,5 @@ def predict():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

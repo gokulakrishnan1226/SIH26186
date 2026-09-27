@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sentinel-ai
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt &&
+      npm ci &&
+      npm run build
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: GEMINI_API_KEY
+        sync: false          # set this manually in the Render dashboard
+    autoDeploy: true
