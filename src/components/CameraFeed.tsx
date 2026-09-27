@@ -135,7 +135,7 @@ export default function CameraFeed({ isStreaming, onToggle, onFrame, faces, fps 
         />
         <canvas
           ref={overlayRef}
-          className="absolute inset-0 w-full h-full pointer-events-none"
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
           style={{ transform: 'scaleX(-1)', display: isStreaming ? 'block' : 'none' }}
         />
         <canvas ref={canvasRef} className="hidden" />

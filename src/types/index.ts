@@ -91,6 +91,9 @@ export interface DetectedFace {
   top_emotion: string;
   confidence: number;
   probabilities: Record<string, number>;
+  engine?: 'gemini' | 'local';
+  micro_expression?: string;
+  stress_score?: number;
 }
 
 export interface EmotionResult {

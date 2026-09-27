@@ -13,6 +13,7 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
+  const isProcessingRef = useRef(false);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [faces, setFaces] = useState<DetectedFace[]>([]);
@@ -21,6 +22,8 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
   const [backendOnline, setBackendOnline] = useState(true);
   const [currentEmotion, setCurrentEmotion] = useState('Neutral');
   const [stressScore, setStressScore] = useState(35);
+  const [activeEngine, setActiveEngine] = useState<'gemini' | 'local'>('local');
+  const [microExpression, setMicroExpression] = useState('');
   const [snapshots, setSnapshots] = useState<{ id: string; time: string; emotion: string; score: number }[]>([]);
 
   const { showToast } = useWelfare();
@@ -38,20 +41,22 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     faceList.forEach(face => {
-      const [x, y, w, h] = face.bbox;
+      const [rawX, y, w, h] = face.bbox;
+      // Calculate mirrored X coordinate so box aligns with scale-x-[-1] video while text stays readable
+      const x = canvas.width - rawX - w;
       const isStressed = ['Angry', 'Fear', 'Sad', 'Disgust'].includes(face.top_emotion);
-      const color = isStressed ? '#ef5350' : '#4fc3f7';
+      const color = isStressed ? '#ff1744' : '#00ff66'; // Vibrant Neon Emerald Green for normal/neutral
 
-      // Bounding box
+      // Bounding box with glowing neon stroke
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 3;
       ctx.shadowColor = color;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 12;
       ctx.strokeRect(x, y, w, h);
       ctx.shadowBlur = 0;
 
-      // Corner Accents
-      const cs = 18;
+      // HUD Corner Accents
+      const cs = Math.min(24, Math.floor(w * 0.2));
       ctx.lineWidth = 4;
       ctx.strokeStyle = color;
       [
@@ -67,14 +72,17 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
         ctx.stroke();
       });
 
-      // Label
-      const label = `${face.top_emotion} • ${face.confidence.toFixed(0)}%`;
-      ctx.font = 'bold 12px Inter, monospace';
+      // Label Badge - Un-mirrored Readable Text
+      const engineBadge = face.engine === 'gemini' ? ' ✨ Gemini' : ' 🟢 Local Model';
+      const label = `${face.top_emotion}${engineBadge} • ${face.confidence.toFixed(0)}%`;
+      ctx.font = 'bold 13px Inter, sans-serif';
       const tw = ctx.measureText(label).width;
+      const labelY = y - 28 > 0 ? y - 28 : y + h + 6;
+      
       ctx.fillStyle = color;
-      ctx.fillRect(x - 1, y - 26, tw + 16, 24);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(label, x + 7, y - 9);
+      ctx.fillRect(x - 1, labelY, tw + 18, 24);
+      ctx.fillStyle = isStressed ? '#ffffff' : '#090d16';
+      ctx.fillText(label, x + 8, labelY + 16);
     });
   }, []);
 
@@ -84,6 +92,7 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
 
   // Capture frame and send to Python Flask AI Backend
   const captureFrame = useCallback(async () => {
+    if (isProcessingRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.paused || video.ended || video.videoWidth === 0) return;
@@ -91,42 +100,60 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-
+    isProcessingRef.current = true;
     try {
-      const res = await fetch('http://127.0.0.1:5000/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: dataUrl }),
-        signal: AbortSignal.timeout(1500)
-      });
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
 
-      if (res.ok) {
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+
+      let res;
+      try {
+        res = await fetch('/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl }),
+          signal: AbortSignal.timeout(3000)
+        });
+      } catch {
+        res = await fetch('http://127.0.0.1:5000/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl }),
+          signal: AbortSignal.timeout(3000)
+        });
+      }
+
+      if (res && res.ok) {
         setBackendOnline(true);
         const data = await res.json();
-        if (data.status === 'success' && data.faces) {
+        if (data.status === 'success' && data.faces && data.faces.length > 0) {
           setFaces(data.faces);
-          if (data.faces.length > 0) {
-            const top = data.faces[0].top_emotion;
-            setCurrentEmotion(top);
-            const calculatedStress = ['Angry', 'Fear', 'Sad', 'Disgust'].includes(top)
-              ? Math.min(98, Math.round(data.faces[0].confidence + 35))
-              : Math.max(15, Math.round(100 - data.faces[0].confidence));
-            setStressScore(calculatedStress);
+          if (data.engine) {
+            setActiveEngine(data.engine);
           }
+          const topFace = data.faces[0];
+          const top = topFace.top_emotion;
+          setCurrentEmotion(top);
+          if (topFace.micro_expression) {
+            setMicroExpression(topFace.micro_expression);
+          }
+          const calculatedStress = topFace.stress_score !== undefined
+            ? topFace.stress_score
+            : (['Angry', 'Fear', 'Sad', 'Disgust'].includes(top)
+                ? Math.min(98, Math.round(topFace.confidence + 35))
+                : Math.max(15, Math.round(100 - topFace.confidence)));
+          setStressScore(calculatedStress);
         }
+      } else {
+        setBackendOnline(false);
       }
-    } catch {
+    } catch (e) {
+      console.warn('Frame capture notice:', e);
       setBackendOnline(false);
-      // Local fallback simulation if backend is restarting
-      const randomEmotions = ['Neutral', 'Happy', 'Focused', 'Calm'];
-      const em = randomEmotions[Math.floor(Math.random() * randomEmotions.length)];
-      setCurrentEmotion(em);
-      setStressScore(32);
+    } finally {
+      isProcessingRef.current = false;
     }
   }, []);
 
@@ -181,8 +208,13 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
             <h3 className="text-sm font-bold text-white uppercase tracking-wider">
               Live AI Optical Monitor
             </h3>
-            <p className="text-xs text-slate-400 font-mono">
-              {backendOnline ? '🟢 AI Inference Engine Online' : '🟡 Standby / Local Mode'}
+            <p className="text-xs font-mono">
+              {backendOnline
+                ? activeEngine === 'gemini'
+                  ? <span className="text-amber-400 font-semibold flex items-center gap-1"><Sparkles className="w-3.5 h-3.5 inline" /> Gemini Vision AI Active</span>
+                  : <span className="text-cyan-400">🟢 Local AI Engine Active</span>
+                : <span className="text-slate-400">🟡 Standby / Local Mode</span>
+              }
             </p>
           </div>
         </div>
@@ -220,7 +252,7 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
         />
         <canvas
           ref={overlayRef}
-          className={`absolute inset-0 w-full h-full pointer-events-none scale-x-[-1] ${
+          className={`absolute inset-0 w-full h-full object-cover pointer-events-none ${
             isStreaming ? 'block' : 'hidden'
           }`}
         />
@@ -233,7 +265,7 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
               Face Detected: <span className="font-bold text-white">{faces.length}</span>
             </div>
             <div className="absolute top-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60 text-xs font-mono text-slate-300">
-              Primary: <span className="font-bold text-cyan-400">{currentEmotion}</span>
+              Engine: <span className="font-bold text-amber-400">{activeEngine === 'gemini' ? '✨ Gemini Vision' : '⚡ Local CNN'}</span>
             </div>
           </>
         )}
@@ -271,6 +303,13 @@ export const CameraMonitor: React.FC<CameraMonitorProps> = ({ compact = false })
               style={{ width: `${stressScore}%` }}
             />
           </div>
+
+          {microExpression && (
+            <p className="text-xs text-slate-400 pt-1 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+              <span>Micro-expressions: <strong className="text-slate-200">{microExpression}</strong></span>
+            </p>
+          )}
         </div>
       )}
 

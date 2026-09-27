@@ -83,6 +83,22 @@ export const SettingsPage: React.FC = () => {
           />
         </div>
 
+        {/* Gemini Vision API Status */}
+        <div className="p-4 bg-slate-900/80 border border-cyan-500/30 rounded-2xl flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-white flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              Gemini Vision AI Engine
+            </p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              High-accuracy face detection, micro-expression tracking & stress evaluation active via API key.
+            </p>
+          </div>
+          <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-full text-xs font-mono font-bold">
+            Configured (.env)
+          </span>
+        </div>
+
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold text-slate-300">Frame Capture Interval</label>
